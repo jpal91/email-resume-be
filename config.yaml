@@ -87,7 +87,7 @@ Resources:
       NotificationConfiguration:
         LambdaConfigurations:
           - Event: s3:ObjectCreated:*
-            Function: !GetAtt S3LambdaFunction.Arn
+            Function: !GetAtt InvokeStepFunction.Arn
   S3BucketPolicy:
     Type: 'AWS::S3::BucketPolicy'
     Properties:
@@ -128,7 +128,7 @@ Resources:
                 - Effect: Allow
                   Principal:
                     Service:
-                        - lambda.amazonaws.com
+                      - lambda.amazonaws.com
                   Action:
                     - sts:AssumeRole
         Policies:
@@ -140,19 +140,124 @@ Resources:
                       Action: 
                         - logs:*
                       Resource: 'arn:aws:logs:*:*:*'
-            - PolicyName: getobjects
+            - PolicyName: getAndDeleteObjects
               PolicyDocument:
                 Version: 2012-10-17
                 Statement:
                     - Effect: Allow
                       Action:
                         - s3:GetObject
+                        - s3:DeleteObject
                       Resource: !Sub 'arn:aws:s3:::${S3BucketName}/*'
+            - PolicyName: stepFunctions
+              PolicyDocument:
+                Version: 2012-10-17
+                Statement:
+                  - Effect: Allow
+                    Action:
+                      - states:*
+                    Resource: "*"
   S3LambdaPermission:
     Type: 'AWS::Lambda::Permission'
     Properties:
         Action: lambda:InvokeFunction
-        FunctionName: !Ref S3LambdaFunction
+        FunctionName: !Ref InvokeStepFunction
         Principal: s3.amazonaws.com
         SourceArn: !Sub 'arn:aws:s3:::${S3BucketName}'
         SourceAccount: !Ref AWS::AccountId
+#######
+# Invoke Step Function
+  InvokeStepFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import os
+
+          def lambda_handler(event, context):
+            step_arn = os.environ['step_arn']
+            step_function = boto3.client('stepfunctions')
+            response = step_function.start_execution(
+              stateMachineArn=step_arn,
+              input=json.dumps({ 'Test': 'Hello' })
+            )
+
+            return response
+      Environment:
+        Variables:
+          step_arn: !Ref StateMachine
+      Role: !GetAtt InvokeExecutionRole.Arn
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Timeout: 5
+  InvokeExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: invokeStepFunctions
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:*
+                Resource: "*"
+        - PolicyName: invokeStepFunctionsLogging
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:*
+                Resource: 'arn:aws:logs:*:*:*'
+  StateMachine:
+    Type: 'AWS::StepFunctions::StateMachine'
+    Properties:
+      StateMachineName: EmailStateMachine
+      DefinitionString: 
+        !Sub
+          - |-
+            {
+              "StartAt": "GetS3Object",
+              "States": {
+                "GetS3Object": {
+                  "Type": "Task",
+                  "Resource": "${lambdaArn}",
+                  "End": true
+                }
+              }
+            }
+          - {lambdaArn: !GetAtt S3LambdaFunction.Arn}
+      RoleArn: !GetAtt StatesExecutionRole.Arn
+  StatesExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - !Sub states.${AWS::Region}.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: statesExecutionPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: "*"
+  
