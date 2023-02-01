@@ -108,13 +108,30 @@ Resources:
               StringEquals:
                 'AWS:SourceAccount': !Ref AWS::AccountId
 #########
+# DDB Table
+  DDBTable:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      AttributeDefinitions:
+        -
+          AttributeName: "email_id"
+          AttributeType: "S"
+      KeySchema:
+        -
+          AttributeName: "email_id"
+          KeyType: "HASH"
+      ProvisionedThroughput:
+        ReadCapacityUnits: '5'
+        WriteCapacityUnits: '5'
+      TableName: EmailInboxTable
+#########
 # Lambda S3 Get Function
   S3LambdaFunction:
     Type: 'AWS::Lambda::Function'
     Properties:
         Code:
             S3Bucket: serverless-email-lambda
-            S3Key: gets3lambda.zip
+            S3Key: getS3lambda.zip
         Handler: index.handler
         Role: !GetAtt S3LambdaExecutionRole.Arn
         Runtime: nodejs18.x
@@ -148,7 +165,7 @@ Resources:
                       Action:
                         - s3:GetObject
                         - s3:DeleteObject
-                      Resource: !Sub 'arn:aws:s3:::${S3BucketName}/*'
+                      Resource: "*"
             - PolicyName: stepFunctions
               PolicyDocument:
                 Version: 2012-10-17
@@ -166,6 +183,54 @@ Resources:
         SourceArn: !Sub 'arn:aws:s3:::${S3BucketName}'
         SourceAccount: !Ref AWS::AccountId
 #######
+# Delete S3 Object  
+  DeleteS3ObjectFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        ZipFile: |
+          import boto3
+
+          def lambda_handler(event, context):
+            print(event)
+            return
+            
+            client = boto3.client('s3')
+
+            try:
+              client.delete_object(
+                Bucket=event['bucketName'],
+                Key=event['keyName']
+              )
+            except:
+              return {
+                'statusCode': 400
+              } 
+      Handler: index.lambda_handler
+      Role: !GetAtt S3LambdaExecutionRole.Arn
+      Runtime: python3.9
+      Timeout: 10
+#######
+# DynamoDB Put Function
+  DynamoDBPutFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+
+          def lambda_handler(event, context):
+            data = json.loads(event)
+            html, text, textAsHtml, subject, stringDate, to, from, messasgeId = data
+            print(data)
+            return
+      Handler: index.lambda_handler
+      Role: !GetAtt S3LambdaExecutionRole.Arn #####MAKE SURE TO REPLACE
+      Runtime: python3.9
+      Timeout: 10
+
+#######
 # Invoke Step Function
   InvokeStepFunction:
     Type: 'AWS::Lambda::Function'
@@ -177,11 +242,14 @@ Resources:
           import os
 
           def lambda_handler(event, context):
+            bucket = event['Records'][0]['s3']['bucket']['name']
+            key = event['Records'][0]['s3']['object']['key']
+            
             step_arn = os.environ['step_arn']
             step_function = boto3.client('stepfunctions')
             response = step_function.start_execution(
               stateMachineArn=step_arn,
-              input=json.dumps({ 'Test': 'Hello' })
+              input=json.dumps({ 'bucketName': bucket, 'keyName': key })
             )
 
             return response
@@ -234,11 +302,37 @@ Resources:
                 "GetS3Object": {
                   "Type": "Task",
                   "Resource": "${lambdaArn}",
+                  "Next": "DeleteAndPut"
+                },
+                "DeleteAndPut": {
+                  "Type": "Parallel",
                   "End": true
+                  "Branches": [
+                    {
+                      "StartAt": "Delete",
+                      "States": {
+                        "Delete": {
+                          "Type": "Task",
+                          "Resource": "${lambdaArn2}",
+                          "End": true
+                        }
+                      }
+                    },
+                    {
+                      "StartAt": "Put",
+                      "States": {
+                        "Put": {
+                          "Type": "Task",
+                          "Resource": "${lambdaArn3}",
+                          "End": true
+                        }
+                      }
+                    }
+                  ]
                 }
               }
             }
-          - {lambdaArn: !GetAtt S3LambdaFunction.Arn}
+          - {lambdaArn: !GetAtt S3LambdaFunction.Arn, lambdaArn2: !GetAtt DeleteS3ObjectFunction.Arn, lambdaArn3: !GetAtt DynamoDBPutFunction.Arn}
       RoleArn: !GetAtt StatesExecutionRole.Arn
   StatesExecutionRole:
     Type: 'AWS::IAM::Role'

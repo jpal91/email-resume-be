@@ -4,8 +4,10 @@ import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3'
 const client = new S3Client({ region: 'us-east-1' })
 
 export const handler = async (event) => {
-    const bucket = event.Records[0].s3.bucket.name
-    const key = event.Records[0].s3.object.key
+    const bucket = event.bucketName
+    const key = event.keyName
+
+    if (!bucket || !key) return
 
     const params = {
         Bucket: bucket,
@@ -26,9 +28,11 @@ export const handler = async (event) => {
     const emailRaw = await s3object.Body.transformToString()
     const { html, text, textAsHtml, subject, date, to, from, messageId } = await simpleParser(emailRaw)
 
+    const stringDate = String(date)
+
     const response = {
         statusCode: 200,
-        body: JSON.stringify({ html, text, textAsHtml, subject, date, to, from, messageId })
+        body: JSON.stringify({ html, text, textAsHtml, subject, stringDate, to, from, messageId })
     }
 
     return response
