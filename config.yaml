@@ -1,0 +1,158 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  EmailIdentityName:
+    Type: String
+  NameOfRecipient:
+    Type: String
+  S3BucketName:
+    Type: String
+  HostedZoneName:
+    Type: String
+  ZoneID:
+    Type: String
+
+Resources:
+##########
+# Route53
+  MXRecord:
+    Type: 'AWS::Route53::RecordSet'
+    Properties:
+      Name: !Ref HostedZoneName
+      HostedZoneId: !Ref ZoneID
+      TTL: 60
+      Type: MX
+      ResourceRecords:
+        - '10 inbound-smtp.us-east-1.amazonaws.com'
+  CNAME1:
+    Type: 'AWS::Route53::RecordSet'
+    Properties:
+      Name: !GetAtt EmailIdentity.DkimDNSTokenName1
+      HostedZoneId: !Ref ZoneID
+      TTL: 60
+      Type: CNAME
+      ResourceRecords:
+        - !GetAtt EmailIdentity.DkimDNSTokenValue1
+  CNAME2:
+    Type: 'AWS::Route53::RecordSet'
+    Properties:
+      Name: !GetAtt EmailIdentity.DkimDNSTokenName2
+      HostedZoneId: !Ref ZoneID
+      TTL: 60
+      Type: CNAME
+      ResourceRecords:
+        - !GetAtt EmailIdentity.DkimDNSTokenValue2
+  CNAME3:
+    Type: 'AWS::Route53::RecordSet'
+    Properties:
+      Name: !GetAtt EmailIdentity.DkimDNSTokenName3
+      HostedZoneId: !Ref ZoneID
+      TTL: 60
+      Type: CNAME
+      ResourceRecords:
+        - !GetAtt EmailIdentity.DkimDNSTokenValue3
+
+##########
+# SES
+  EmailIdentity:
+    Type: 'AWS::SES::EmailIdentity'
+    Properties:
+      EmailIdentity: !Ref EmailIdentityName
+  ReceiptRuleSet:
+    Type: 'AWS::SES::ReceiptRuleSet'
+    Properties:
+      RuleSetName: RecipientRuleSet
+  ReceiptRule1:
+    Type: 'AWS::SES::ReceiptRule'
+    DependsOn:
+      - TargetS3Bucket
+    Properties:
+      RuleSetName: !Ref ReceiptRuleSet
+      Rule:
+        Name: ReceiptRule1
+        Enabled: true
+        ScanEnabled: true
+        Recipients: 
+          - !Ref NameOfRecipient
+        Actions:
+          - S3Action:
+              BucketName: !Ref TargetS3Bucket
+###########
+# S3 Bucket
+  TargetS3Bucket:
+    Type: 'AWS::S3::Bucket'
+    DependsOn:
+      - S3LambdaPermission
+    Properties:
+      BucketName: !Ref S3BucketName
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:*
+            Function: !GetAtt S3LambdaFunction.Arn
+  S3BucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref TargetS3Bucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action: 
+                - s3:PutObject
+            Effect: Allow
+            Resource: !Sub 'arn:aws:s3:::${TargetS3Bucket}/*'
+            Principal:
+              Service: 
+                - ses.amazonaws.com
+            Condition:
+              StringLike:
+                'AWS:SourceArn': 'arn:aws:ses:*'
+              StringEquals:
+                'AWS:SourceAccount': !Ref AWS::AccountId
+#########
+# Lambda S3 Get Function
+  S3LambdaFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+        Code:
+            S3Bucket: serverless-email-lambda
+            S3Key: gets3lambda.zip
+        Handler: index.handler
+        Role: !GetAtt S3LambdaExecutionRole.Arn
+        Runtime: nodejs18.x
+        Timeout: 10
+  S3LambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+        AssumeRolePolicyDocument:
+            Version: 2012-10-17
+            Statement:
+                - Effect: Allow
+                  Principal:
+                    Service:
+                        - lambda.amazonaws.com
+                  Action:
+                    - sts:AssumeRole
+        Policies:
+            - PolicyName: allowLogging
+              PolicyDocument:
+                Version: 2012-10-17
+                Statement:
+                    - Effect: Allow
+                      Action: 
+                        - logs:*
+                      Resource: 'arn:aws:logs:*:*:*'
+            - PolicyName: getobjects
+              PolicyDocument:
+                Version: 2012-10-17
+                Statement:
+                    - Effect: Allow
+                      Action:
+                        - s3:GetObject
+                      Resource: !Sub 'arn:aws:s3:::${S3BucketName}/*'
+  S3LambdaPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+        Action: lambda:InvokeFunction
+        FunctionName: !Ref S3LambdaFunction
+        Principal: s3.amazonaws.com
+        SourceArn: !Sub 'arn:aws:s3:::${S3BucketName}'
+        SourceAccount: !Ref AWS::AccountId
