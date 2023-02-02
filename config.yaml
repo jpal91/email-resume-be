@@ -202,7 +202,8 @@ Resources:
                 Bucket=event['bucketName'],
                 Key=event['keyName']
               )
-            except:
+            except Exception as e:
+              print(e)
               return {
                 'statusCode': 400
               } 
@@ -221,14 +222,59 @@ Resources:
           import json
 
           def lambda_handler(event, context):
-            data = json.loads(event)
-            html, text, textAsHtml, subject, stringDate, to, from, messasgeId = data
-            print(data)
-            return
+            data = json.loads(event['data'])
+            dynamodb = boto3.resource('dynamodb')
+            table = dynamodb.Table('EmailInboxTable')
+            
+            try:
+              response = table.put_item(
+                Item={
+                  'email_id': data['messageId'][1:-1],
+                  'html': data['html'],
+                  'date': data['stringDate'],
+                  'to': data['to']['text'],
+                  'from': data['from']['text']
+                }
+              )
+              print(response)
+            except Exception as e:
+              print(e)
+              return { statusCode: 400 }
+
+            return { statusCode: 200 }
       Handler: index.lambda_handler
-      Role: !GetAtt S3LambdaExecutionRole.Arn #####MAKE SURE TO REPLACE
+      Role: !GetAtt DynamoDBExecutionRole.Arn 
       Runtime: python3.9
       Timeout: 10
+  DynamoDBExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: ddbLogging
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:*
+                Resource: 'arn:aws:logs:*:*:*'
+        - PolicyName: ddbPut
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                Resource: "*"
 
 #######
 # Invoke Step Function
@@ -293,46 +339,56 @@ Resources:
     Type: 'AWS::StepFunctions::StateMachine'
     Properties:
       StateMachineName: EmailStateMachine
-      DefinitionString: 
-        !Sub
-          - |-
-            {
-              "StartAt": "GetS3Object",
-              "States": {
-                "GetS3Object": {
-                  "Type": "Task",
-                  "Resource": "${lambdaArn}",
-                  "Next": "DeleteAndPut"
-                },
-                "DeleteAndPut": {
-                  "Type": "Parallel",
-                  "End": true
-                  "Branches": [
-                    {
-                      "StartAt": "Delete",
-                      "States": {
-                        "Delete": {
-                          "Type": "Task",
-                          "Resource": "${lambdaArn2}",
-                          "End": true
-                        }
-                      }
-                    },
-                    {
-                      "StartAt": "Put",
-                      "States": {
-                        "Put": {
-                          "Type": "Task",
-                          "Resource": "${lambdaArn3}",
-                          "End": true
-                        }
-                      }
+      DefinitionString: |-
+        {
+          "StartAt": "GetS3Object",
+          "States": {
+            "GetS3Object": {
+              "Type": "Task",
+              "Resource": "${lambdaArn}",
+              "InputPath": "$",
+              "ResultPath": "$.result",
+              "Next": "DeleteAndPut"
+            },
+            "DeleteAndPut": {
+              "Type": "Parallel",
+              "End": true,
+              "Branches": [
+                {
+                  "StartAt": "Delete",
+                  "States": {
+                    "Delete": {
+                      "Type": "Task",
+                      "Parameters": {
+                        "bucketName.$": "$.bucketName",
+                        "keyName.$": "$.keyName"
+                      },
+                      "Resource": "${lambdaArn2}",
+                      "End": true
                     }
-                  ]
+                  }
+                },
+                {
+                  "StartAt": "Put",
+                  "States": {
+                    "Put": {
+                      "Type": "Task",
+                      "Parameters": {
+                        "data.$": "$.result.body"
+                      },
+                      "Resource": "${lambdaArn3}",
+                      "End": true
+                    }
+                  }
                 }
-              }
+              ]
             }
-          - {lambdaArn: !GetAtt S3LambdaFunction.Arn, lambdaArn2: !GetAtt DeleteS3ObjectFunction.Arn, lambdaArn3: !GetAtt DynamoDBPutFunction.Arn}
+          }
+        }
+      DefinitionSubstitutions:
+        lambdaArn: !GetAtt S3LambdaFunction.Arn
+        lambdaArn2: !GetAtt DeleteS3ObjectFunction.Arn
+        lambdaArn3: !GetAtt DynamoDBPutFunction.Arn
       RoleArn: !GetAtt StatesExecutionRole.Arn
   StatesExecutionRole:
     Type: 'AWS::IAM::Role'
