@@ -84,6 +84,11 @@ Resources:
       - S3LambdaPermission
     Properties:
       BucketName: !Ref S3BucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
       NotificationConfiguration:
         LambdaConfigurations:
           - Event: s3:ObjectCreated:*
