@@ -6,6 +6,11 @@ Parameters:
     Type: String
   S3BucketName:
     Type: String
+    Description: The name of the S3 Bucket to hold incoming emails
+    AllowedPattern: "[a-z0-9]+(?:[.-][a-z0-9]+)*"
+    ConstraintDescription: "Must be between 3 and 63 characters. Must start and end with a letter or a number, and contain only lower case letters, numbers, periods, and dashes. Ex my-first-bucket-123"
+    MinLength: 3
+    MaxLength: 63
   HostedZoneName:
     Type: String
   ZoneID:
@@ -353,47 +358,31 @@ Resources:
               "Resource": "${lambdaArn}",
               "InputPath": "$",
               "ResultPath": "$.result",
-              "Next": "DeleteAndPut"
+              "Next": "Put"
             },
-            "DeleteAndPut": {
-              "Type": "Parallel",
-              "End": true,
-              "Branches": [
-                {
-                  "StartAt": "Delete",
-                  "States": {
-                    "Delete": {
-                      "Type": "Task",
-                      "Parameters": {
-                        "bucketName.$": "$.bucketName",
-                        "keyName.$": "$.keyName"
-                      },
-                      "Resource": "${lambdaArn2}",
-                      "End": true
-                    }
-                  }
-                },
-                {
-                  "StartAt": "Put",
-                  "States": {
-                    "Put": {
-                      "Type": "Task",
-                      "Parameters": {
-                        "data.$": "$.result.body"
-                      },
-                      "Resource": "${lambdaArn3}",
-                      "End": true
-                    }
-                  }
-                }
-              ]
+            "Put": {
+              "Type": "Task",
+              "Parameters": {
+                "data.$": "$.result.body"
+              },
+              "Resource": "${lambdaArn2}",
+              "Next": "Delete"
+            },
+            "Delete": {
+              "Type": "Task",
+              "Parameters": {
+                "bucketName.$": "$.bucketName",
+                "keyName.$": "$.keyName"
+              },
+              "Resource": "${lambdaArn3}",
+              "End": true
             }
           }
         }
       DefinitionSubstitutions:
         lambdaArn: !GetAtt S3LambdaFunction.Arn
-        lambdaArn2: !GetAtt DeleteS3ObjectFunction.Arn
-        lambdaArn3: !GetAtt DynamoDBPutFunction.Arn
+        lambdaArn2: !GetAtt DynamoDBPutFunction.Arn
+        lambdaArn3: !GetAtt DeleteS3ObjectFunction.Arn
       RoleArn: !GetAtt StatesExecutionRole.Arn
   StatesExecutionRole:
     Type: 'AWS::IAM::Role'
