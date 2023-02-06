@@ -1,20 +1,24 @@
 AWSTemplateFormatVersion: 2010-09-09
 Parameters:
-  EmailIdentityName:
-    Type: String
   NameOfRecipient:
     Type: String
+    Description: Email address to receive incoming emails. Can be anything you want but must be a valid email format. ie john@mydomain.com.
+    AllowedPattern: '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+    ConstraintDescription: Must be a valid email address
   S3BucketName:
     Type: String
     Description: The name of the S3 Bucket to hold incoming emails
-    AllowedPattern: "[a-z0-9]+(?:[.-][a-z0-9]+)*"
+    AllowedPattern: '[a-z0-9]+(?:[.-][a-z0-9]+)*'
     ConstraintDescription: "Must be between 3 and 63 characters. Must start and end with a letter or a number, and contain only lower case letters, numbers, periods, and dashes. Ex my-first-bucket-123"
     MinLength: 3
     MaxLength: 63
   HostedZoneName:
     Type: String
+    Description: The name of your domain ie mydomain.com
+    AllowedPattern: '[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
   ZoneID:
     Type: String
+    Description: ZoneID from your AWS Route53 Hosted Zone that you created
 
 Resources:
 ##########
@@ -61,7 +65,7 @@ Resources:
   EmailIdentity:
     Type: 'AWS::SES::EmailIdentity'
     Properties:
-      EmailIdentity: !Ref EmailIdentityName
+      EmailIdentity: !Ref HostedZoneName
   ReceiptRuleSet:
     Type: 'AWS::SES::ReceiptRuleSet'
     Properties:
